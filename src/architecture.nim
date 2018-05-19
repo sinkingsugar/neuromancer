@@ -103,146 +103,146 @@ func innovationID*(connection: Connection; a, b: float): float =
   # https://en.wikipedia.org/wiki/Pairing_function (Cantor pairing function)
   1 / 2 * (a + b) * (a + b + 1) + b
 
-proc activate*(this: Node): float =
-  this.old = this.state
+proc activate*(self: Node): float =
+  self.old = self.state
 
-  # All activation sources coming from the this itself
-  this.state = this.connections.self.gain * this.connections.self.weight * this.state + this.bias
+  # All activation sources coming from the self itself
+  self.state = self.connections.self.gain * self.connections.self.weight * self.state + self.bias
 
   # Activation sources coming from connections
-  for connection in this.connections.inbound:
-    this.state += connection.nodeFrom.activation * connection.weight * connection.gain
+  for connection in self.connections.inbound:
+    self.state += connection.nodeFrom.activation * connection.weight * connection.gain
 
-  this.activation = this.squash.forward(this.state) * this.mask
-  this.derivative = this.squash.derivative(this.state)
+  self.activation = self.squash.forward(self.state) * self.mask
+  self.derivative = self.squash.derivative(self.state)
 
   var
     nodes = newSeq[Node]()
     influences = newSeq[float]()
   
-  for connection in this.connections.gated:
+  for connection in self.connections.gated:
     let
-      this = connection.nodeTo
-      index = nodes.find(this)
+      self = connection.nodeTo
+      index = nodes.find(self)
     
     if index > -1:
       influences[index] += connection.weight * connection.nodeFrom.activation
     else:
-      nodes.insert(this)
-      let plus = if this.connections.self.gater == this: this.old else: 0
+      nodes.insert(self)
+      let plus = if self.connections.self.gater == self: self.old else: 0
       influences.insert(connection.weight * connection.nodeFrom.activation + plus)
     
-    connection.gain = this.activation
+    connection.gain = self.activation
   
-  for connection in this.connections.inbound:
+  for connection in self.connections.inbound:
     connection.elegibility = 
-      this.connections.self.gain * 
-      this.connections.self.weight * 
+      self.connections.self.gain * 
+      self.connections.self.weight * 
       connection.elegibility + connection.nodeFrom.activation * 
       connection.gain
     
     for i in 0..<nodes.len:
       let
-        this = nodes[i]
+        self = nodes[i]
         influence = influences[i]
-        index = connection.xtrace.nodes.find(this)
+        index = connection.xtrace.nodes.find(self)
       
       if index > -1:
         connection.xtrace.values[index] =
-          this.connections.self.gain *
-          this.connections.self.weight *
-          connection.xtrace.values[index] + this.derivative *
+          self.connections.self.gain *
+          self.connections.self.weight *
+          connection.xtrace.values[index] + self.derivative *
           connection.elegibility *
           influence
       else:
-        connection.xtrace.nodes.insert(this)
-        connection.xtrace.values.insert(this.derivative * connection.elegibility * influence)
+        connection.xtrace.nodes.insert(self)
+        connection.xtrace.values.insert(self.derivative * connection.elegibility * influence)
   
-  return this.activation
+  return self.activation
 
-proc activate*(this: Node; input: float): float =
-  this.activation = input
+proc activate*(self: Node; input: float): float =
+  self.activation = input
   return input
 
-proc activate*(this: Layer): seq[float] =
+proc activate*(self: Layer): seq[float] =
   result = newSeq[float]()
   
-  for node in this.nodes:
+  for node in self.nodes:
     result.insert(node.activate())
 
-proc activate*(this: Layer; values: seq[float]): seq[float] =
-  assert(values.len == this.nodes.len)
+proc activate*(self: Layer; values: seq[float]): seq[float] =
+  assert(values.len == self.nodes.len)
 
   result = newSeq[float]()
   
-  for i in 0..<this.nodes.len:
-    let node = this.nodes[i]
+  for i in 0..<self.nodes.len:
+    let node = self.nodes[i]
     result.insert(node.activate(values[i]))
 
-proc noTraceActivate*(this: Node): float =
-  # All activation sources coming from the this itself
-  this.state = this.connections.self.gain * this.connections.self.weight * this.state + this.bias
+proc noTraceActivate*(self: Node): float =
+  # All activation sources coming from the self itself
+  self.state = self.connections.self.gain * self.connections.self.weight * self.state + self.bias
 
   # Activation sources coming from connections
-  for connection in this.connections.inbound:
-    this.state += connection.nodeFrom.activation * connection.weight * connection.gain
+  for connection in self.connections.inbound:
+    self.state += connection.nodeFrom.activation * connection.weight * connection.gain
 
   # Squash the values received
-  this.activation = this.squash.forward(this.state)
+  self.activation = self.squash.forward(self.state)
 
-  for connection in this.connections.gated:
-    connection.gain = this.activation
+  for connection in self.connections.gated:
+    connection.gain = self.activation
   
-  return this.activation
+  return self.activation
 
-proc noTraceActivate*(this: Node; input: float): float = this.activate(input)
+proc noTraceActivate*(self: Node; input: float): float = self.activate(input)
 
-proc propagate*(this: Node; rateOption, momentumOption: Option[float]; update: bool; target: float = 0.0) =
+proc propagate*(self: Node; rateOption, momentumOption: Option[float]; update: bool; target: float = 0.0) =
   let
     momentum = if momentumOption.isSome: momentumOption.get else: 0.0
     rate = if rateOption.isSome: rateOption.get else: 0.3
   
   var error = 0.0
 
-  if this.kind == NodeKind.Output: # Output nodes get their error from the enviroment
-    this.error.responsibility = target - this.activation
-    this.error.projected = this.error.responsibility
+  if self.kind == NodeKind.Output: # Output nodes get their error from the enviroment
+    self.error.responsibility = target - self.activation
+    self.error.projected = self.error.responsibility
   else:
-    for connection in this.connections.outbound:
-      let this = connection.nodeTo
-      error += this.error.responsibility * connection.weight * connection.gain
+    for connection in self.connections.outbound:
+      let self = connection.nodeTo
+      error += self.error.responsibility * connection.weight * connection.gain
   
     # Projected error responsibility
-    this.error.projected = this.derivative * error
+    self.error.projected = self.derivative * error
 
-    # Error responsibilities from all connections gated by this neuron
+    # Error responsibilities from all connections gated by self neuron
     error = 0.0
 
-    for connection in this.connections.gated:
-      let this = connection.nodeTo
+    for connection in self.connections.gated:
+      let self = connection.nodeTo
       
-      var influence = if this.connections.self.gater == this: this.old else: 0
+      var influence = if self.connections.self.gater == self: self.old else: 0
       
       influence += connection.weight * connection.nodeFrom.activation
-      error += this.error.responsibility * influence
+      error += self.error.responsibility * influence
 
-    this.error.gated = this.derivative * error
+    self.error.gated = self.derivative * error
 
-    this.error.responsibility = this.error.projected + this.error.gated
+    self.error.responsibility = self.error.projected + self.error.gated
   
-  if this.kind == NodeKind.Constant: return
+  if self.kind == NodeKind.Constant: return
 
-  for connection in this.connections.inbound:
-    var gradient = this.error.projected * connection.elegibility
+  for connection in self.connections.inbound:
+    var gradient = self.error.projected * connection.elegibility
 
     for i in 0..<connection.xtrace.nodes.len:
       let
-        this = connection.xtrace.nodes[i]
+        self = connection.xtrace.nodes[i]
         value = connection.xtrace.values[i]
       
-      gradient += this.error.responsibility * value
+      gradient += self.error.responsibility * value
 
-    let deltaWeight = rate * gradient * this.mask
+    let deltaWeight = rate * gradient * self.mask
     connection.totalDeltaWeight = deltaWeight
     if update:
       connection.totalDeltaWeight += momentum * connection.previousDeltaWeight
@@ -250,123 +250,123 @@ proc propagate*(this: Node; rateOption, momentumOption: Option[float]; update: b
       connection.previousDeltaWeight = connection.totalDeltaWeight
       connection.totalDeltaWeight = 0
   
-  let deltaBias = rate * this.error.responsibility
-  this.totalDeltaBias += deltaBias
+  let deltaBias = rate * self.error.responsibility
+  self.totalDeltaBias += deltaBias
   if update:
-    this.totalDeltaBias += momentum * this.previousDeltaBias
-    this.bias += this.totalDeltaBias
-    this.previousDeltaBias = this.totalDeltaBias
-    this.totalDeltaBias = 0
+    self.totalDeltaBias += momentum * self.previousDeltaBias
+    self.bias += self.totalDeltaBias
+    self.previousDeltaBias = self.totalDeltaBias
+    self.totalDeltaBias = 0
 
-proc propagate*(this: Layer; rateOption, momentumOption: Option[float]; update: bool; target: float = 0.0): seq[float] =  
-  for node in this.nodes:
+proc propagate*(self: Layer; rateOption, momentumOption: Option[float]; update: bool; target: float = 0.0): seq[float] =  
+  for node in self.nodes:
     node.propagate(rateOption, momentumOption, true, target)
 
-proc isProjectingTo(this, target: Node): bool =
-  if target == this and this.connections.self.weight != 0:
+proc isProjectingTo(self, target: Node): bool =
+  if target == self and self.connections.self.weight != 0:
     return true
   
-  for connection in this.connections.outbound:
+  for connection in self.connections.outbound:
     if connection.nodeTo == target:
       return true
   
   return false
 
-proc isProjectedBy*(this, node: Node): bool =
-  if node == this and this.connections.self.weight != 0:
+proc isProjectedBy*(self, node: Node): bool =
+  if node == self and self.connections.self.weight != 0:
     return true
   
-  for connection in this.connections.inbound:
+  for connection in self.connections.inbound:
     if connection.nodeFrom == node:
       return true
   
   return false
 
-proc gate*(this: Node; connections: Connection | seq[Connection]) =
+proc gate*(self: Node; connections: Connection | seq[Connection]) =
   when connections is Connection:
-    this.connections.gated.insert(connections)
-    connection.gater = this
+    self.connections.gated.insert(connections)
+    connection.gater = self
   elif connections is seq[Connection]:
     for connection in connections:
-      this.gate(connections)
+      self.gate(connections)
 
-proc ungate*(this: Node; connections: Connection | seq[Connection]) =
+proc ungate*(self: Node; connections: Connection | seq[Connection]) =
   when connections is Connection:
-    let index = this.connections.gated.find(connections)
-    this.connections.gated.delete(index)
+    let index = self.connections.gated.find(connections)
+    self.connections.gated.delete(index)
     connections.gater = nil
     connections.gain = 1
   elif connections is seq[Connection]:
     for connection in connections:
-      this.ungate(connections)
+      self.ungate(connections)
 
-proc connect*(this, target: Node | Layer; kindOption: Option[ConnectionKind] = ConnectionKind.none; weight: float = 1): seq[Connection] =
+proc connect*(self, target: Node | Layer; kindOption: Option[ConnectionKind] = ConnectionKind.none; weight: float = 1): seq[Connection] =
   result = newSeq[Connection]()
 
-  when this is Layer and target is Layer:
+  when self is Layer and target is Layer:
     var kind = ConnectionKind.AllToAll
 
     if kindOption.isNone:
-      if this == target:
+      if self == target:
         kind = ConnectionKind.OneToOne
     else:
       kind = kindOption.get
 
     if kind == ConnectionKind.AllToAll or kind == ConnectionKind.AllToElse:
-      for i in 0..<this.nodes.len:
+      for i in 0..<self.nodes.len:
         for j in 0..<target.nodes.len:
-          if kind == ConnectionKind.AllToElse and this.nodes[i] == target.nodes[j]:
+          if kind == ConnectionKind.AllToElse and self.nodes[i] == target.nodes[j]:
             continue
-          let connection = this.nodes[i].connect(target.nodes[j], kindOption, weight)
-          this.connections.outbound.insert(connection)
+          let connection = self.nodes[i].connect(target.nodes[j], kindOption, weight)
+          self.connections.outbound.insert(connection)
           target.connections.inbound.insert(connection)
           result.insert(connection)
     elif kind == ConnectionKind.OneToOne:
-      assert(this.nodes.len == target.nodes.len)
+      assert(self.nodes.len == target.nodes.len)
 
-      for i in 0..<this.nodes.len:
-        let connection = this.nodes[i].connect(target.nodes[i], kindOption, weight)
-        this.connections.self.insert(connection)
+      for i in 0..<self.nodes.len:
+        let connection = self.nodes[i].connect(target.nodes[i], kindOption, weight)
+        self.connections.self.insert(connection)
         result.insert(connection)
-  elif this is Layer and target is Node:
-    for node in this.nodes:
+  elif self is Layer and target is Node:
+    for node in self.nodes:
       let connection = node.connect(target, weight)
-      this.connections.outbound.insert(connection)
+      self.connections.outbound.insert(connection)
       result.insert(connection)
-  elif this is Node and target is Layer:
+  elif self is Node and target is Layer:
     for subNode in target.nodes:
-      let connection = newConnection(this, subNode, weight)
+      let connection = newConnection(self, subNode, weight)
       subNode.connections.inbound.insert(connection)
-      this.connections.outbound.insert(connection)
+      self.connections.outbound.insert(connection)
       target.connections.inbound.insert(connection)
       result.insert(connection)
-  elif this is Node and target is Node:
-    if this == target:
-      if this.connections.self.weight != 0:
+  elif self is Node and target is Node:
+    if self == target:
+      if self.connections.self.weight != 0:
         echo "This connection already exists!"
       else:
-        this.connections.self.weight = weight
+        self.connections.self.weight = weight
   
-      result.insert(this.connections.self)
-    elif this.isProjectingTo(target):
-      raiseAssert("Already projecting a connection to this node!")
+      result.insert(self.connections.self)
+    elif self.isProjectingTo(target):
+      raiseAssert("Already projecting a connection to self node!")
     else:
-      let connection = newConnection(this, target, weight)
+      let connection = newConnection(self, target, weight)
       target.connections.inbound.insert(connection)
-      this.connections.outbound.insert(connection)
+      self.connections.outbound.insert(connection)
       
       result.insert(connection)
 
-proc disconnect*(this, target: Node | Layer; twosided: bool = false) =
-  when this is Node and target is Node:
-    if this == target:
-      this.connections.self.weight = 0
+proc disconnect*(self, target: Node | Layer; twosided: bool = false) =
+  when self is Node and target is Node:
+    if self == target:
+      self.connections.self.weight = 0
       return
     
-    for i in countdown(this.connections.outbound.len - 1, 0):
-      let connection = this.connections.outbound[i]
+    for i in countdown(self.connections.outbound.len - 1, 0):
+      let connection = self.connections.outbound[i]
       if connection.nodeTo == target:
-        this.connections.outbound.delete(i)
+        self.connections.outbound.delete(i)
         let j = connection.nodeTo.connections.inbound.find(connection)
         connection.nodeTo.connections.inbound.delete(j)
         if connection.gater != nil:
@@ -374,71 +374,71 @@ proc disconnect*(this, target: Node | Layer; twosided: bool = false) =
         break
     
     if twosided:
-      target.disconnect(this)
-  elif this is Layer and target is Layer:
-    for i in 0..<this.nodes.len:
+      target.disconnect(self)
+  elif self is Layer and target is Layer:
+    for i in 0..<self.nodes.len:
       for j in 0..<target.nodes.len:
-        this.nodes[i].disconnect(target.nodes[j], twosided)
+        self.nodes[i].disconnect(target.nodes[j], twosided)
 
-        for k in countdown(this.connections.outbound.len - 1, 0):
-          let connection = this.connections.outbound[k]
+        for k in countdown(self.connections.outbound.len - 1, 0):
+          let connection = self.connections.outbound[k]
 
-          if connection.nodeFrom == this.nodes[i] and connection.nodeTo == target.nodes[j]:
-            this.connections.outbound.delete(k)
+          if connection.nodeFrom == self.nodes[i] and connection.nodeTo == target.nodes[j]:
+            self.connections.outbound.delete(k)
             break
         
         if twosided:
-          for k in countdown(this.connections.inbound.len - 1, 0):
-            let connection = this.connections.inbound[k]
+          for k in countdown(self.connections.inbound.len - 1, 0):
+            let connection = self.connections.inbound[k]
 
-            if connection.nodeFrom == target.nodes[j] and connection.nodeTo == this.nodes[i]:
-              this.connections.inbound.delete(k)
+            if connection.nodeFrom == target.nodes[j] and connection.nodeTo == self.nodes[i]:
+              self.connections.inbound.delete(k)
               break
-  elif this is Layer and target is Node:
-    for node in this.nodes:
+  elif self is Layer and target is Node:
+    for node in self.nodes:
       node.disconnect(target, twosided)
     
-      for k in countdown(this.connections.outbound.len - 1, 0):
-        let connection = this.connections.outbound[k]
+      for k in countdown(self.connections.outbound.len - 1, 0):
+        let connection = self.connections.outbound[k]
 
         if connection.nodeFrom == node and connection.nodeTo == target:
-          this.connections.outbound.delete(k)
+          self.connections.outbound.delete(k)
           break
       
       if twosided:
-        for k in countdown(this.connections.inbound.len - 1, 0):
-          let connection = this.connections.inbound[k]
+        for k in countdown(self.connections.inbound.len - 1, 0):
+          let connection = self.connections.inbound[k]
 
           if connection.nodeFrom == target and connection.nodeTo == node:
-            this.connections.inbound.delete(k)
+            self.connections.inbound.delete(k)
             break
 
-proc clear*(this: Node) =
-  for connection in this.connections.inbound:
+proc clear*(self: Node) =
+  for connection in self.connections.inbound:
     connection.elegibility = 0
     connection.xtrace.nodes = @[]
     connection.xtrace.values = @[]
 
-  for connection in this.connections.gated:
+  for connection in self.connections.gated:
     connection.gain = 0
   
-  this.error.responsibility = 0
-  this.error.projected = 0
-  this.error.gated = 0
+  self.error.responsibility = 0
+  self.error.projected = 0
+  self.error.gated = 0
 
-  this.old = 0
-  this.state = 0
-  this.activation = 0
+  self.old = 0
+  self.state = 0
+  self.activation = 0
 
-proc mutate*(this: Node; kind: MutationKind) =
+proc mutate*(self: Node; kind: MutationKind) =
   case kind
   of MutationKind.Activation:
     let 
-      current = ActivationMutation.allowed.find(this.squash)
+      current = ActivationMutation.allowed.find(self.squash)
       newSquash = (current.float + floor(rand(1.0) * (ActivationMutation.allowed.len - 1).float) + 1).int mod ActivationMutation.allowed.len
-    this.squash = ActivationMutation.allowed[newSquash]
+    self.squash = ActivationMutation.allowed[newSquash]
   of MutationKind.Bias:
-    this.bias = rand(1.0) * (BiasMutation.max - BiasMutation.min) + BiasMutation.min
+    self.bias = rand(1.0) * (BiasMutation.max - BiasMutation.min) + BiasMutation.min
   else:
     discard
 
@@ -487,7 +487,7 @@ when isMainModule:
     discard output.connect(outputMemory.input, ConnectionKind.OneToOne.some, 1.0)
     discard outputMemory.output.connect(hidden)
 
-    for i in 0..1_000:
+    for i in 0..3_00:
       discard input.activate(@[0.0, 0.0])
       discard outputMemory.input.activate()
       discard outputMemory.output.activate()
