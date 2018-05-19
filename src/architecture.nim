@@ -23,6 +23,8 @@ type
   NodeKind* {.pure.} = enum
     Input, Output, Hidden, Constant
 
+  Network* = seq[Layer]
+
   Layer* = ref object
     nodes: seq[Node]
     
@@ -170,32 +172,20 @@ proc activate*(self: Layer): seq[float] =
   for node in self.nodes:
     result.insert(node.activate())
 
-proc activate*(self: Layer; values: seq[float]): seq[float] =
-  assert(values.len == self.nodes.len)
+proc activate*(self: Layer; input: seq[float]): seq[float] =
+  assert(input.len == self.nodes.len)
 
   result = newSeq[float]()
   
   for i in 0..<self.nodes.len:
     let node = self.nodes[i]
-    result.insert(node.activate(values[i]))
+    result.insert(node.activate(input[i]))
 
-proc noTraceActivate*(self: Node): float =
-  # All activation sources coming from the self itself
-  self.state = self.connections.self.gain * self.connections.self.weight * self.state + self.bias
-
-  # Activation sources coming from connections
-  for connection in self.connections.inbound:
-    self.state += connection.nodeFrom.activation * connection.weight * connection.gain
-
-  # Squash the values received
-  self.activation = self.squash.forward(self.state)
-
-  for connection in self.connections.gated:
-    connection.gain = self.activation
-  
-  return self.activation
-
-proc noTraceActivate*(self: Node; input: float): float = self.activate(input)
+proc activate*(network: Network; input: seq[float]): seq[float] =
+  discard network[0].activate(input)
+  for i in 1..<network.len - 1:
+    discard network[i].activate()
+  return network[^1].activate()
 
 proc propagate*(self: Node; rateOption, momentumOption: Option[float]; update: bool; target: float = 0.0) =
   let
@@ -258,9 +248,22 @@ proc propagate*(self: Node; rateOption, momentumOption: Option[float]; update: b
     self.previousDeltaBias = self.totalDeltaBias
     self.totalDeltaBias = 0
 
-proc propagate*(self: Layer; rateOption, momentumOption: Option[float]; update: bool; target: float = 0.0): seq[float] =  
-  for node in self.nodes:
-    node.propagate(rateOption, momentumOption, true, target)
+proc propagate*(self: Layer; rateOption, momentumOption: Option[float]; update: bool; targets: seq[float]) =  
+  assert(self.nodes.len == targets.len)
+
+  for i in 0..<self.nodes.len:
+    let node = self.nodes[i]
+    node.propagate(rateOption, momentumOption, true, targets[i])
+
+proc propagate*(self: Layer; rateOption, momentumOption: Option[float]; update: bool) =  
+  for i in 0..<self.nodes.len:
+    let node = self.nodes[i]
+    node.propagate(rateOption, momentumOption, true)
+
+proc propagate*(self: Network; rateOption, momentumOption: Option[float]; update: bool; targets: seq[float]) =
+  self[^1].propagate(rateOption, momentumOption, update, targets)
+  for i in countdown(self.len - 2, 0):
+    self[i].propagate(rateOption, momentumOption, update)
 
 proc isProjectingTo(self, target: Node): bool =
   if target == self and self.connections.self.weight != 0:
@@ -479,6 +482,15 @@ when isMainModule:
       hidden = newLayer(4, NodeKind.Hidden)
       output = newLayer(1, NodeKind.Output)
       outputMemory = Layer.Memory(1, 4)
+      network = @[
+        input, 
+        outputMemory.input, 
+        outputMemory.output, 
+        hidden, 
+        inputMemory.input, 
+        inputMemory.output, 
+        output
+      ]
     
     discard input.connect(hidden)
     discard input.connect(inputMemory.input, ConnectionKind.OneToOne.some, 1.0)
@@ -487,113 +499,45 @@ when isMainModule:
     discard output.connect(outputMemory.input, ConnectionKind.OneToOne.some, 1.0)
     discard outputMemory.output.connect(hidden)
 
-    for i in 0..3_00:
-      discard input.activate(@[0.0, 0.0])
-      discard outputMemory.input.activate()
-      discard outputMemory.output.activate()
-      discard hidden.activate()
-      discard inputMemory.input.activate()
-      discard inputMemory.output.activate()
-      echo output.activate(), " ", 1.0
+    for i in 0..5_00:
+      echo network.activate(@[0.0, 0.0]), " ", 1.0
+      network.propagate(float.none, float.none, true, @[1.0])
 
-      discard output.propagate(float.none, float.none, true, 1.0)
-      discard inputMemory.output.propagate(float.none, float.none, true)
-      discard inputMemory.input.propagate(float.none, float.none, true)
-      discard hidden.propagate(float.none, float.none, true)
-      discard outputMemory.output.propagate(float.none, float.none, true)
-      discard outputMemory.input.propagate(float.none, float.none, true)
-      discard input.propagate(float.none, float.none, true)
+      echo network.activate(@[0.0, 1.0]), " ", 0.0
+      network.propagate(float.none, float.none, true, @[0.0])
 
-      discard input.activate(@[0.0, 1.0])
-      discard outputMemory.input.activate()
-      discard outputMemory.output.activate()
-      discard hidden.activate()
-      discard inputMemory.input.activate()
-      discard inputMemory.output.activate()
-      echo output.activate(), " ", 0.0
+      echo network.activate(@[1.0, 0.0]), " ", 0.0
+      network.propagate(float.none, float.none, true, @[0.0])
 
-      discard output.propagate(float.none, float.none, true, 0.0)
-      discard inputMemory.output.propagate(float.none, float.none, true)
-      discard inputMemory.input.propagate(float.none, float.none, true)
-      discard hidden.propagate(float.none, float.none, true)
-      discard outputMemory.output.propagate(float.none, float.none, true)
-      discard outputMemory.input.propagate(float.none, float.none, true)
-      discard input.propagate(float.none, float.none, true)
-
-      discard input.activate(@[1.0, 0.0])
-      discard outputMemory.input.activate()
-      discard outputMemory.output.activate()
-      discard hidden.activate()
-      discard inputMemory.input.activate()
-      discard inputMemory.output.activate()
-      echo output.activate(), " ", 0.0
-
-      discard output.propagate(float.none, float.none, true, 0.0)
-      discard inputMemory.output.propagate(float.none, float.none, true)
-      discard inputMemory.input.propagate(float.none, float.none, true)
-      discard hidden.propagate(float.none, float.none, true)
-      discard outputMemory.output.propagate(float.none, float.none, true)
-      discard outputMemory.input.propagate(float.none, float.none, true)
-      discard input.propagate(float.none, float.none, true)
-
-      discard input.activate(@[1.0, 1.0])
-      discard outputMemory.input.activate()
-      discard outputMemory.output.activate()
-      discard hidden.activate()
-      discard inputMemory.input.activate()
-      discard inputMemory.output.activate()
-      echo output.activate(), " ", 1.0
-
-      discard output.propagate(float.none, float.none, true, 1.0)
-      discard inputMemory.output.propagate(float.none, float.none, true)
-      discard inputMemory.input.propagate(float.none, float.none, true)
-      discard hidden.propagate(float.none, float.none, true)
-      discard outputMemory.output.propagate(float.none, float.none, true)
-      discard outputMemory.input.propagate(float.none, float.none, true)
-      discard input.propagate(float.none, float.none, true)
+      echo network.activate(@[1.0, 1.0]), " ", 1.0
+      network.propagate(float.none, float.none, true, @[1.0])
   else:
     let
       input = newLayer(2, NodeKind.Input)
       hidden = newLayer(4, NodeKind.Hidden)
       output = newLayer(1, NodeKind.Output)
+      network = @[
+        input,
+        hidden,
+        output
+      ]
     
     discard input.connect(hidden)
     discard hidden.connect(output)
 
-    hidden.disconnect(output.nodes[0])
-    hidden.disconnect(output)
+    # hidden.disconnect(output.nodes[0])
+    # hidden.disconnect(output)
+    # discard hidden.connect(output)
 
-    discard hidden.connect(output)
+    for i in 0..20_000:
+      echo network.activate(@[0.0, 0.0]), " ", 1.0
+      network.propagate(float.none, float.none, true, @[1.0])
 
-    for i in 0..10_000:
-      discard input.activate(@[0.0, 0.0])
-      discard hidden.activate()
-      echo output.activate(), " ", 1.0
+      echo network.activate(@[0.0, 1.0]), " ", 0.0
+      network.propagate(float.none, float.none, true, @[0.0])
 
-      discard output.propagate(float.none, float.none, true, 1.0)
-      discard hidden.propagate(float.none, float.none, true)
-      discard input.propagate(float.none, float.none, true)
+      echo network.activate(@[1.0, 0.0]), " ", 0.0
+      network.propagate(float.none, float.none, true, @[0.0])
 
-      discard input.activate(@[0.0, 1.0])
-      discard hidden.activate()
-      echo output.activate(), " ", 0.0
-
-      discard output.propagate(float.none, float.none, true, 0.0)
-      discard hidden.propagate(float.none, float.none, true)
-      discard input.propagate(float.none, float.none, true)
-
-      discard input.activate(@[1.0, 0.0])
-      discard hidden.activate()
-      echo output.activate(), " ", 0.0
-
-      discard output.propagate(float.none, float.none, true, 0.0)
-      discard hidden.propagate(float.none, float.none, true)
-      discard input.propagate(float.none, float.none, true)
-
-      discard input.activate(@[1.0, 1.0])
-      discard hidden.activate()
-      echo output.activate(), " ", 1.0
-
-      discard output.propagate(float.none, float.none, true, 1.0)
-      discard hidden.propagate(float.none, float.none, true)
-      discard input.propagate(float.none, float.none, true)
+      echo network.activate(@[1.0, 1.0]), " ", 1.0
+      network.propagate(float.none, float.none, true, @[1.0])
