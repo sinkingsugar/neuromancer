@@ -72,6 +72,9 @@ proc newConnection*(nodeFrom, nodeTo: Node; weight: float): Connection =
 
   result.gater = nil
 
+  result.xtrace.nodes = newSeq[Node]()
+  result.xtrace.values = newSeq[float]()
+
 proc newConnection*(nodeFrom, nodeTo: Node): Connection = newConnection(nodeFrom, nodeTo, rand(1.0) * 0.2 - 0.1)
 
 proc newNode*(kind: NodeKind = NodeKind.Hidden): Node =
@@ -106,6 +109,8 @@ func innovationID*(connection: Connection; a, b: float): float =
   1 / 2 * (a + b) * (a + b + 1) + b
 
 proc activate*(self: Node): float =
+  #  if (training) this.mask = Math.random() < this.dropout ? 0 : 1;
+
   self.old = self.state
 
   # All activation sources coming from the self itself
@@ -124,14 +129,14 @@ proc activate*(self: Node): float =
   
   for connection in self.connections.gated:
     let
-      self = connection.nodeTo
-      index = nodes.find(self)
+      node = connection.nodeTo
+      index = nodes.find(node)
     
     if index > -1:
       influences[index] += connection.weight * connection.nodeFrom.activation
     else:
-      nodes.insert(self)
-      let plus = if self.connections.self.gater == self: self.old else: 0
+      nodes.insert(node)
+      let plus = if node.connections.self.gater == self: node.old else: 0
       influences.insert(connection.weight * connection.nodeFrom.activation + plus)
     
     connection.gain = self.activation
@@ -145,19 +150,19 @@ proc activate*(self: Node): float =
     
     for i in 0..<nodes.len:
       let
-        self = nodes[i]
+        node = nodes[i]
         influence = influences[i]
-        index = connection.xtrace.nodes.find(self)
+        index = connection.xtrace.nodes.find(node)
       
       if index > -1:
         connection.xtrace.values[index] =
-          self.connections.self.gain *
-          self.connections.self.weight *
+          node.connections.self.gain *
+          node.connections.self.weight *
           connection.xtrace.values[index] + self.derivative *
           connection.elegibility *
           influence
       else:
-        connection.xtrace.nodes.insert(self)
+        connection.xtrace.nodes.insert(node)
         connection.xtrace.values.insert(self.derivative * connection.elegibility * influence)
   
   return self.activation
@@ -199,8 +204,8 @@ proc propagate*(self: Node; rateOption, momentumOption: Option[float]; update: b
     self.error.projected = self.error.responsibility
   else:
     for connection in self.connections.outbound:
-      let self = connection.nodeTo
-      error += self.error.responsibility * connection.weight * connection.gain
+      let node = connection.nodeTo
+      error += node.error.responsibility * connection.weight * connection.gain
   
     # Projected error responsibility
     self.error.projected = self.derivative * error
@@ -209,12 +214,12 @@ proc propagate*(self: Node; rateOption, momentumOption: Option[float]; update: b
     error = 0.0
 
     for connection in self.connections.gated:
-      let self = connection.nodeTo
+      let node = connection.nodeTo
       
-      var influence = if self.connections.self.gater == self: self.old else: 0
+      var influence = if node.connections.self.gater == self: node.old else: 0
       
       influence += connection.weight * connection.nodeFrom.activation
-      error += self.error.responsibility * influence
+      error += node.error.responsibility * influence
 
     self.error.gated = self.derivative * error
 
@@ -227,10 +232,10 @@ proc propagate*(self: Node; rateOption, momentumOption: Option[float]; update: b
 
     for i in 0..<connection.xtrace.nodes.len:
       let
-        self = connection.xtrace.nodes[i]
+        node = connection.xtrace.nodes[i]
         value = connection.xtrace.values[i]
       
-      gradient += self.error.responsibility * value
+      gradient += node.error.responsibility * value
 
     let deltaWeight = rate * gradient * self.mask
     connection.totalDeltaWeight = deltaWeight
@@ -288,10 +293,55 @@ proc isProjectedBy*(self, node: Node): bool =
 proc gate*(self: Node; connections: Connection | seq[Connection]) =
   when connections is Connection:
     self.connections.gated.insert(connections)
-    connection.gater = self
+    connections.gater = self
   elif connections is seq[Connection]:
     for connection in connections:
       self.gate(connections)
+
+proc gate*(self: Layer; connections: Connection | seq[Connection]; kind: GatingKind) = 
+  var 
+    conns: seq[Connection]
+    nodes1 = newSeq[Node]()
+    nodes2 = newSeq[Node]()
+
+  when connections is Connection:
+    conns = @[connections]
+  else:
+    conns = connections
+  
+  for connection in conns:
+    if not nodes1.contains(connection.nodeFrom):
+      nodes1.insert(connection.nodeFrom)
+    if not nodes2.contains(connection.nodeTo):
+      nodes2.insert(connection.nodeTo)
+  
+  case kind
+  of GatingKind.Input:
+    for i in 0..<nodes2.len:
+      let
+        node = nodes2[i]
+        gater = self.nodes[i mod self.nodes.len]
+      
+      for connection in node.connections.inbound:
+        if connections.contains(connection):
+          gater.gate(connection)
+  of GatingKind.Output:
+    for i in 0..<nodes1.len:
+      let
+        node = nodes1[i]
+        gater = self.nodes[i mod self.nodes.len]
+      
+      for connection in node.connections.outbound:
+        if connections.contains(connection):
+          gater.gate(connection)
+  of GatingKind.Self:
+    for i in 0..<nodes1.len:
+      let
+        node = nodes1[i]
+        gater = self.nodes[i mod self.nodes.len]
+      
+      if connections.contains(node.connections.self):
+        gater.gate(node.connections.self)
 
 proc ungate*(self: Node; connections: Connection | seq[Connection]) =
   when connections is Connection:
@@ -416,22 +466,29 @@ proc disconnect*(self, target: Node | Layer; twosided: bool = false) =
             self.connections.inbound.delete(k)
             break
 
-proc clear*(self: Node) =
-  for connection in self.connections.inbound:
-    connection.elegibility = 0
-    connection.xtrace.nodes = @[]
-    connection.xtrace.values = @[]
+proc clear*(self: Node | Layer | Network) =
+  when self is Node:
+    for connection in self.connections.inbound:
+      connection.elegibility = 0
+      connection.xtrace.nodes = @[]
+      connection.xtrace.values = @[]
 
-  for connection in self.connections.gated:
-    connection.gain = 0
-  
-  self.error.responsibility = 0
-  self.error.projected = 0
-  self.error.gated = 0
+    for connection in self.connections.gated:
+      connection.gain = 0
+    
+    self.error.responsibility = 0
+    self.error.projected = 0
+    self.error.gated = 0
 
-  self.old = 0
-  self.state = 0
-  self.activation = 0
+    self.old = 0
+    self.state = 0
+    self.activation = 0
+  elif self is Layer:
+    for node in self.nodes:
+      node.clear()
+  elif self is Network:
+    for layer in self:
+      layer.clear()
 
 proc mutate*(self: Node; kind: MutationKind) =
   case kind
@@ -445,7 +502,7 @@ proc mutate*(self: Node; kind: MutationKind) =
   else:
     discard
 
-proc Memory*(_: typedesc[Layer], size, memory: int): tuple[input: Layer, output: Layer] =
+proc Memory*(_: typedesc[Layer], size, memory: int): tuple[input, output: Layer; nodes: seq[Layer]] =
   var previous: Layer = nil
   var layers = newSeq[Layer]()
   for i in 0..<memory:
@@ -473,6 +530,42 @@ proc Memory*(_: typedesc[Layer], size, memory: int): tuple[input: Layer, output:
     result.output.nodes = result.output.nodes.concat(layer.nodes)
   
   result.input = layers[^1]
+  result.nodes = layers
+
+proc LSTM*(_: typedesc[Layer], size: int): tuple[input, inputGate, output: Layer; nodes: seq[Layer]] =
+  let
+    inputGate = newLayer(size)
+    forgetGate = newLayer(size)
+    memoryCell = newLayer(size)
+    outputGate = newLayer(size)
+    outputBlock = newLayer(size)
+
+  var layers = newSeq[Layer]()
+
+  for node in inputGate.nodes:
+    node.bias = 1
+  
+  for node in forgetGate.nodes:
+    node.bias = 1
+  
+  for node in outputGate.nodes:
+    node.bias = 1
+
+  discard memoryCell.connect(inputGate, ConnectionKind.AllToAll.some)
+  discard memoryCell.connect(forgetGate, ConnectionKind.AllToAll.some)
+  discard memoryCell.connect(outputGate, ConnectionKind.AllToAll.some)
+
+  let
+    forget = memoryCell.connect(memoryCell, ConnectionKind.OneToOne.some)
+    output = memoryCell.connect(outputBlock, ConnectionKind.AllToAll.some)
+
+  forgetGate.gate(forget, GatingKind.Self)
+  outputGate.gate(output, GatingKind.Output)
+
+  result.output = outputBlock
+  result.input = memoryCell
+  result.inputGate = inputGate
+  result.nodes = @[inputGate, forgetGate, memoryCell, outputGate, outputBlock]
 
 when isMainModule:
   when defined(NARX):
@@ -511,6 +604,67 @@ when isMainModule:
 
       echo network.activate(@[1.0, 1.0]), " ", 1.0
       network.propagate(float.none, float.none, true, @[1.0])
+  elif defined(LSTM):
+    let
+      input = newLayer(1, NodeKind.Input)
+      lstmSize = 6
+      inputGate = newLayer(lstmSize)
+      forgetGate = newLayer(lstmSize)
+      memoryCell = newLayer(lstmSize)
+      outputGate = newLayer(lstmSize)
+      output = newLayer(1, NodeKind.Output)
+      network = @[
+        input,
+        inputGate,
+        forgetGate,
+        memoryCell,
+        outputGate,
+        output
+      ]
+    
+    for node in inputGate.nodes:
+      node.bias = 1
+  
+    for node in forgetGate.nodes:
+      node.bias = 1
+    
+    for node in outputGate.nodes:
+      node.bias = 1
+
+    let inputConn = input.connect(memoryCell, ConnectionKind.AllToAll.some)
+    discard input.connect(inputGate, ConnectionKind.AllToAll.some)
+    discard input.connect(outputGate, ConnectionKind.AllToAll.some)
+    discard input.connect(forgetGate, ConnectionKind.AllToAll.some)
+
+    discard memoryCell.connect(inputGate, ConnectionKind.AllToAll.some)
+    discard memoryCell.connect(forgetGate, ConnectionKind.AllToAll.some)
+    discard memoryCell.connect(outputGate, ConnectionKind.AllToAll.some)
+
+    let
+      forgetConn = memoryCell.connect(memoryCell, ConnectionKind.OneToOne.some)
+      outputConn = memoryCell.connect(output, ConnectionKind.AllToAll.some)
+  
+    inputGate.gate(inputConn, GatingKind.Input)
+    forgetGate.gate(forgetConn, GatingKind.Self)
+    outputGate.gate(outputConn, GatingKind.Output)
+
+    for i in 0..6_000:
+      echo network.activate(@[0.0]), " ", 0.0
+      network.propagate(float.none, float.none, true, @[0.0])
+
+      echo network.activate(@[1.0]), " ", 1.0
+      network.propagate(float.none, float.none, true, @[1.0])
+
+      echo network.activate(@[1.0]), " ", 0.0
+      network.propagate(float.none, float.none, true, @[0.0])
+
+      echo network.activate(@[0.0]), " ", 1.0
+      network.propagate(float.none, float.none, true, @[1.0])
+
+      echo network.activate(@[0.0]), " ", 0.0
+      network.propagate(float.none, float.none, true, @[0.0])
+
+      network.clear()
   else:
     let
       input = newLayer(2, NodeKind.Input)

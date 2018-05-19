@@ -7,6 +7,9 @@ type
   ConnectionKind* {.pure.} = enum
     AllToAll, AllToElse, OneToOne
 
+  GatingKind* {.pure.} = enum
+    Output, Input, Self
+
   Activation* = object
     forward*: proc(x: float): float
     derivative*: proc(x: float): float
