@@ -1,4 +1,4 @@
-import random, options, sequtils, math
+import random, options, sequtils, math, algorithm
 import methods
 
 type
@@ -23,7 +23,7 @@ type
   NodeKind* {.pure.} = enum
     Input, Output, Hidden, Constant
 
-  NodeGroup* = ref object
+  Layer* = ref object
     nodes: seq[Node]
     
     connections: tuple[
@@ -86,7 +86,7 @@ proc newNode*(kind: NodeKind = NodeKind.Hidden): Node =
   result.connections.gated = newSeq[Connection]()
   result.connections.self = newConnection(result, result, 0)
 
-proc newGroup*(size: int): NodeGroup =
+proc newLayer*(size: int; kind: NodeKind = NodeKind.Hidden): Layer =
   new result
 
   result.nodes = newSeq[Node]()
@@ -96,11 +96,12 @@ proc newGroup*(size: int): NodeGroup =
   result.connections.self = newSeq[Connection]()
 
   for i in 0..<size:
-    result.nodes.insert(newNode())
+    result.nodes.insert(newNode(kind))
 
-# Returns an innovation ID
-# https://en.wikipedia.org/wiki/Pairing_function (Cantor pairing function)
-func innovationID*(connection: Connection; a, b: float): float = 1 / 2 * (a + b) * (a + b + 1) + b
+func innovationID*(connection: Connection; a, b: float): float =
+  # Returns an innovation ID
+  # https://en.wikipedia.org/wiki/Pairing_function (Cantor pairing function)
+  1 / 2 * (a + b) * (a + b + 1) + b
 
 proc activate*(this: Node): float =
   this.old = this.state
@@ -163,13 +164,13 @@ proc activate*(this: Node; input: float): float =
   this.activation = input
   return input
 
-proc activate*(this: NodeGroup): seq[float] =
+proc activate*(this: Layer): seq[float] =
   result = newSeq[float]()
   
   for node in this.nodes:
     result.insert(node.activate())
 
-proc activate*(this: NodeGroup; values: seq[float]): seq[float] =
+proc activate*(this: Layer; values: seq[float]): seq[float] =
   assert(values.len == this.nodes.len)
 
   result = newSeq[float]()
@@ -196,7 +197,7 @@ proc noTraceActivate*(this: Node): float =
 
 proc noTraceActivate*(this: Node; input: float): float = this.activate(input)
 
-proc propagate*(this: Node; rateOption, momentumOption: Option[float]; update: bool; target: float) =
+proc propagate*(this: Node; rateOption, momentumOption: Option[float]; update: bool; target: float = 0.0) =
   let
     momentum = if momentumOption.isSome: momentumOption.get else: 0.0
     rate = if rateOption.isSome: rateOption.get else: 0.3
@@ -257,7 +258,7 @@ proc propagate*(this: Node; rateOption, momentumOption: Option[float]; update: b
     this.previousDeltaBias = this.totalDeltaBias
     this.totalDeltaBias = 0
 
-proc propagate*(this: NodeGroup; rateOption, momentumOption: Option[float]; target: float): seq[float] =  
+proc propagate*(this: Layer; rateOption, momentumOption: Option[float]; update: bool; target: float = 0.0): seq[float] =  
   for node in this.nodes:
     node.propagate(rateOption, momentumOption, true, target)
 
@@ -271,71 +272,146 @@ proc isProjectingTo(this, target: Node): bool =
   
   return false
 
-proc connect*(this, target: Node; weight: float = 1): seq[Connection] =
+proc isProjectedBy*(this, node: Node): bool =
+  if node == this and this.connections.self.weight != 0:
+    return true
+  
+  for connection in this.connections.inbound:
+    if connection.nodeFrom == node:
+      return true
+  
+  return false
+
+proc gate*(this: Node; connections: Connection | seq[Connection]) =
+  when connections is Connection:
+    this.connections.gated.insert(connections)
+    connection.gater = this
+  elif connections is seq[Connection]:
+    for connection in connections:
+      this.gate(connections)
+
+proc ungate*(this: Node; connections: Connection | seq[Connection]) =
+  when connections is Connection:
+    let index = this.connections.gated.find(connections)
+    this.connections.gated.delete(index)
+    connections.gater = nil
+    connections.gain = 1
+  elif connections is seq[Connection]:
+    for connection in connections:
+      this.ungate(connections)
+
+proc connect*(this, target: Node | Layer; kindOption: Option[ConnectionKind] = ConnectionKind.none; weight: float = 1): seq[Connection] =
   result = newSeq[Connection]()
 
-  if this == target:
-    if this.connections.self.weight != 0:
-      echo "This connection already exists!"
+  when this is Layer and target is Layer:
+    var kind = ConnectionKind.AllToAll
+
+    if kindOption.isNone:
+      if this == target:
+        kind = ConnectionKind.OneToOne
     else:
-      this.connections.self.weight = weight
+      kind = kindOption.get
 
-    result.insert(this.connections.self)
-  elif this.isProjectingTo(target):
-    raiseAssert("Already projecting a connection to this node!")
-  else:
-    let connection = newConnection(this, target, weight)
-    target.connections.inbound.insert(connection)
-    this.connections.outbound.insert(connection)
+    if kind == ConnectionKind.AllToAll or kind == ConnectionKind.AllToElse:
+      for i in 0..<this.nodes.len:
+        for j in 0..<target.nodes.len:
+          if kind == ConnectionKind.AllToElse and this.nodes[i] == target.nodes[j]:
+            continue
+          let connection = this.nodes[i].connect(target.nodes[j], kindOption, weight)
+          this.connections.outbound.insert(connection)
+          target.connections.inbound.insert(connection)
+          result.insert(connection)
+    elif kind == ConnectionKind.OneToOne:
+      assert(this.nodes.len == target.nodes.len)
+
+      for i in 0..<this.nodes.len:
+        let connection = this.nodes[i].connect(target.nodes[i], kindOption, weight)
+        this.connections.self.insert(connection)
+        result.insert(connection)
+  elif this is Layer and target is Node:
+    for node in this.nodes:
+      let connection = node.connect(target, weight)
+      this.connections.outbound.insert(connection)
+      result.insert(connection)
+  elif this is Node and target is Layer:
+    for subNode in target.nodes:
+      let connection = newConnection(this, subNode, weight)
+      subNode.connections.inbound.insert(connection)
+      this.connections.outbound.insert(connection)
+      target.connections.inbound.insert(connection)
+      result.insert(connection)
+  elif this is Node and target is Node:
+    if this == target:
+      if this.connections.self.weight != 0:
+        echo "This connection already exists!"
+      else:
+        this.connections.self.weight = weight
+  
+      result.insert(this.connections.self)
+    elif this.isProjectingTo(target):
+      raiseAssert("Already projecting a connection to this node!")
+    else:
+      let connection = newConnection(this, target, weight)
+      target.connections.inbound.insert(connection)
+      this.connections.outbound.insert(connection)
+      
+      result.insert(connection)
+
+proc disconnect*(this, target: Node | Layer; twosided: bool = false) =
+  when this is Node and target is Node:
+    if this == target:
+      this.connections.self.weight = 0
+      return
     
-    result.insert(connection)
+    for i in countdown(this.connections.outbound.len - 1, 0):
+      let connection = this.connections.outbound[i]
+      if connection.nodeTo == target:
+        this.connections.outbound.delete(i)
+        let j = connection.nodeTo.connections.inbound.find(connection)
+        connection.nodeTo.connections.inbound.delete(j)
+        if connection.gater != nil:
+          connection.gater.ungate(connection)
+        break
+    
+    if twosided:
+      target.disconnect(this)
+  elif this is Layer and target is Layer:
+    for i in 0..<this.nodes.len:
+      for j in 0..<target.nodes.len:
+        this.nodes[i].disconnect(target.nodes[j], twosided)
 
-proc connect*(this: Node; target: NodeGroup; weight: float = 1): seq[Connection] =
-  result = newSeq[Connection]()
+        for k in countdown(this.connections.outbound.len - 1, 0):
+          let connection = this.connections.outbound[k]
 
-  for subNode in target.nodes:
-    let connection = newConnection(this, subNode, weight)
-    subNode.connections.inbound.insert(connection)
-    this.connections.outbound.insert(connection)
-    target.connections.inbound.insert(connection)
+          if connection.nodeFrom == this.nodes[i] and connection.nodeTo == target.nodes[j]:
+            this.connections.outbound.delete(k)
+            break
+        
+        if twosided:
+          for k in countdown(this.connections.inbound.len - 1, 0):
+            let connection = this.connections.inbound[k]
 
-    result.insert(connection)
+            if connection.nodeFrom == target.nodes[j] and connection.nodeTo == this.nodes[i]:
+              this.connections.inbound.delete(k)
+              break
+  elif this is Layer and target is Node:
+    for node in this.nodes:
+      node.disconnect(target, twosided)
+    
+      for k in countdown(this.connections.outbound.len - 1, 0):
+        let connection = this.connections.outbound[k]
 
-proc ungate*(this: Node; connection: Connection) =
-  let index = this.connections.gated.find(connection)
-  this.connections.gated.delete(index)
-  connection.gater = nil
-  connection.gain = 1
+        if connection.nodeFrom == node and connection.nodeTo == target:
+          this.connections.outbound.delete(k)
+          break
+      
+      if twosided:
+        for k in countdown(this.connections.inbound.len - 1, 0):
+          let connection = this.connections.inbound[k]
 
-proc ungate*(this: Node; connections: seq[Connection]) =
-  for connection in connections:
-    this.ungate(connection)
-
-proc disconnect*(this, node: Node; twosided: bool = false) =
-  if this == node:
-    this.connections.self.weight = 0
-    return
-  
-  for i in countdown(this.connections.outbound.len - 1, 0):
-    let connection = this.connections.outbound[i]
-    if connection.nodeTo == node:
-      this.connections.outbound.delete(i)
-      let j = connection.nodeTo.connections.inbound.find(connection)
-      connection.nodeTo.connections.inbound.delete(j)
-      if connection.gater != nil:
-        connection.gater.ungate(connection)
-      break
-  
-  if twosided:
-    node.disconnect(this)
-
-proc gate*(this: Node; connection: Connection) =
-  this.connections.gated.insert(connection)
-  connection.gater = this
-
-proc gate*(this: Node; connections: seq[Connection]) =
-  for connection in connections:
-    this.gate(connection)
+          if connection.nodeFrom == target and connection.nodeTo == node:
+            this.connections.inbound.delete(k)
+            break
 
 proc clear*(this: Node) =
   for connection in this.connections.inbound:
@@ -366,12 +442,158 @@ proc mutate*(this: Node; kind: MutationKind) =
   else:
     discard
 
-proc isProjectedBy*(this, node: Node): bool =
-  if node == this and this.connections.self.weight != 0:
-    return true
+proc Memory*(_: typedesc[Layer], size, memory: int): tuple[input: Layer, output: Layer] =
+  var previous: Layer = nil
+  var layers = newSeq[Layer]()
+  for i in 0..<memory:
+    let layer = newLayer(size)
+
+    for node in layer.nodes:
+      node.squash = Activation.identity
+      node.bias = 0
+      node.kind = NodeKind.Constant
+    
+    if previous != nil:
+      discard previous.connect(layer, ConnectionKind.OneToOne.some, 1.0)
+    
+    previous = layer
+
+    layers.insert(layer)
   
-  for connection in this.connections.inbound:
-    if connection.nodeFrom == node:
-      return true
+  layers.reverse()
+
+  for layer in layers:
+    layer.nodes.reverse()
+
+  result.output = newLayer(0)
+  for layer in layers:
+    result.output.nodes = result.output.nodes.concat(layer.nodes)
   
-  return false
+  result.input = layers[^1]
+
+when isMainModule:
+  when defined(NARX):
+    let
+      input = newLayer(2, NodeKind.Input)
+      inputMemory = Layer.Memory(2, 4)
+      hidden = newLayer(4, NodeKind.Hidden)
+      output = newLayer(1, NodeKind.Output)
+      outputMemory = Layer.Memory(1, 4)
+    
+    discard input.connect(hidden)
+    discard input.connect(inputMemory.input, ConnectionKind.OneToOne.some, 1.0)
+    discard inputMemory.output.connect(hidden)
+    discard hidden.connect(output)
+    discard output.connect(outputMemory.input, ConnectionKind.OneToOne.some, 1.0)
+    discard outputMemory.output.connect(hidden)
+
+    for i in 0..1_000:
+      discard input.activate(@[0.0, 0.0])
+      discard outputMemory.input.activate()
+      discard outputMemory.output.activate()
+      discard hidden.activate()
+      discard inputMemory.input.activate()
+      discard inputMemory.output.activate()
+      echo output.activate(), " ", 1.0
+
+      discard output.propagate(float.none, float.none, true, 1.0)
+      discard inputMemory.output.propagate(float.none, float.none, true)
+      discard inputMemory.input.propagate(float.none, float.none, true)
+      discard hidden.propagate(float.none, float.none, true)
+      discard outputMemory.output.propagate(float.none, float.none, true)
+      discard outputMemory.input.propagate(float.none, float.none, true)
+      discard input.propagate(float.none, float.none, true)
+
+      discard input.activate(@[0.0, 1.0])
+      discard outputMemory.input.activate()
+      discard outputMemory.output.activate()
+      discard hidden.activate()
+      discard inputMemory.input.activate()
+      discard inputMemory.output.activate()
+      echo output.activate(), " ", 0.0
+
+      discard output.propagate(float.none, float.none, true, 0.0)
+      discard inputMemory.output.propagate(float.none, float.none, true)
+      discard inputMemory.input.propagate(float.none, float.none, true)
+      discard hidden.propagate(float.none, float.none, true)
+      discard outputMemory.output.propagate(float.none, float.none, true)
+      discard outputMemory.input.propagate(float.none, float.none, true)
+      discard input.propagate(float.none, float.none, true)
+
+      discard input.activate(@[1.0, 0.0])
+      discard outputMemory.input.activate()
+      discard outputMemory.output.activate()
+      discard hidden.activate()
+      discard inputMemory.input.activate()
+      discard inputMemory.output.activate()
+      echo output.activate(), " ", 0.0
+
+      discard output.propagate(float.none, float.none, true, 0.0)
+      discard inputMemory.output.propagate(float.none, float.none, true)
+      discard inputMemory.input.propagate(float.none, float.none, true)
+      discard hidden.propagate(float.none, float.none, true)
+      discard outputMemory.output.propagate(float.none, float.none, true)
+      discard outputMemory.input.propagate(float.none, float.none, true)
+      discard input.propagate(float.none, float.none, true)
+
+      discard input.activate(@[1.0, 1.0])
+      discard outputMemory.input.activate()
+      discard outputMemory.output.activate()
+      discard hidden.activate()
+      discard inputMemory.input.activate()
+      discard inputMemory.output.activate()
+      echo output.activate(), " ", 1.0
+
+      discard output.propagate(float.none, float.none, true, 1.0)
+      discard inputMemory.output.propagate(float.none, float.none, true)
+      discard inputMemory.input.propagate(float.none, float.none, true)
+      discard hidden.propagate(float.none, float.none, true)
+      discard outputMemory.output.propagate(float.none, float.none, true)
+      discard outputMemory.input.propagate(float.none, float.none, true)
+      discard input.propagate(float.none, float.none, true)
+  else:
+    let
+      input = newLayer(2, NodeKind.Input)
+      hidden = newLayer(4, NodeKind.Hidden)
+      output = newLayer(1, NodeKind.Output)
+    
+    discard input.connect(hidden)
+    discard hidden.connect(output)
+
+    hidden.disconnect(output.nodes[0])
+    hidden.disconnect(output)
+
+    discard hidden.connect(output)
+
+    for i in 0..10_000:
+      discard input.activate(@[0.0, 0.0])
+      discard hidden.activate()
+      echo output.activate(), " ", 1.0
+
+      discard output.propagate(float.none, float.none, true, 1.0)
+      discard hidden.propagate(float.none, float.none, true)
+      discard input.propagate(float.none, float.none, true)
+
+      discard input.activate(@[0.0, 1.0])
+      discard hidden.activate()
+      echo output.activate(), " ", 0.0
+
+      discard output.propagate(float.none, float.none, true, 0.0)
+      discard hidden.propagate(float.none, float.none, true)
+      discard input.propagate(float.none, float.none, true)
+
+      discard input.activate(@[1.0, 0.0])
+      discard hidden.activate()
+      echo output.activate(), " ", 0.0
+
+      discard output.propagate(float.none, float.none, true, 0.0)
+      discard hidden.propagate(float.none, float.none, true)
+      discard input.propagate(float.none, float.none, true)
+
+      discard input.activate(@[1.0, 1.0])
+      discard hidden.activate()
+      echo output.activate(), " ", 1.0
+
+      discard output.propagate(float.none, float.none, true, 1.0)
+      discard hidden.propagate(float.none, float.none, true)
+      discard input.propagate(float.none, float.none, true)

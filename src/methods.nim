@@ -4,8 +4,8 @@ type
   MutationKind* {.pure.} = enum
     Activation, Bias
 
-  BiasMutation* = object
-  ActivationMutation* = object
+  ConnectionKind* {.pure.} = enum
+    AllToAll, AllToElse, OneToOne
 
   Activation* = object
     forward*: proc(x: float): float
@@ -31,19 +31,11 @@ template identity*(_: typedesc[Activation]): Activation = Activation(forward: id
 template relu*(_: typedesc[Activation]): Activation = Activation(forward: reluF, derivative: reluD)
 
 var
-  mutationBiasMin = -1.0
-  mutationBiasMax = 1.0
-  
-  allowedActivationMutations = @[
-    Activation.logistic,
-    Activation.tanh,
-    Activation.identity,
-    Activation.relu
-  ]
-
-proc min*(_: typedesc[BiasMutation]): float = mutationBiasMin
-proc min*(_: typedesc[BiasMutation], value: float) = mutationBiasMin = value
-proc max*(_: typedesc[BiasMutation]): float = mutationBiasMax
-proc max*(_: typedesc[BiasMutation], value: float) = mutationBiasMax = value
-
-proc allowed*(_: typedesc[ActivationMutation]): seq[Activation] = allowedActivationMutations
+  BiasMutation* = (min: -1.0, max: 1.0)
+  ActivationMutation* = (
+    allowed: @[
+      Activation.logistic,
+      Activation.tanh,
+      Activation.identity,
+      Activation.relu
+    ])
