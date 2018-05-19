@@ -502,9 +502,9 @@ proc mutate*(self: Node; kind: MutationKind) =
   else:
     discard
 
-proc Memory*(_: typedesc[Layer], size, memory: int): tuple[input, output: Layer; nodes: seq[Layer]] =
+proc Memory*(_: typedesc[Layer], size, memory: int): seq[Layer] =
   var previous: Layer = nil
-  var layers = newSeq[Layer]()
+  result = newSeq[Layer]()
   for i in 0..<memory:
     let layer = newLayer(size)
 
@@ -517,30 +517,19 @@ proc Memory*(_: typedesc[Layer], size, memory: int): tuple[input, output: Layer;
       discard previous.connect(layer, ConnectionKind.OneToOne.some, 1.0)
     
     previous = layer
-
-    layers.insert(layer)
+    result.insert(layer)
   
-  layers.reverse()
+  result.reverse()
 
-  for layer in layers:
+  for layer in result:
     layer.nodes.reverse()
 
-  result.output = newLayer(0)
-  for layer in layers:
-    result.output.nodes = result.output.nodes.concat(layer.nodes)
-  
-  result.input = layers[^1]
-  result.nodes = layers
-
-proc LSTM*(_: typedesc[Layer], size: int): tuple[input, inputGate, output: Layer; nodes: seq[Layer]] =
+proc LSTM*(_: typedesc[Layer], size: int): seq[Layer] =
   let
     inputGate = newLayer(size)
     forgetGate = newLayer(size)
     memoryCell = newLayer(size)
     outputGate = newLayer(size)
-    outputBlock = newLayer(size)
-
-  var layers = newSeq[Layer]()
 
   for node in inputGate.nodes:
     node.bias = 1
@@ -557,15 +546,10 @@ proc LSTM*(_: typedesc[Layer], size: int): tuple[input, inputGate, output: Layer
 
   let
     forget = memoryCell.connect(memoryCell, ConnectionKind.OneToOne.some)
-    output = memoryCell.connect(outputBlock, ConnectionKind.AllToAll.some)
 
   forgetGate.gate(forget, GatingKind.Self)
-  outputGate.gate(output, GatingKind.Output)
 
-  result.output = outputBlock
-  result.input = memoryCell
-  result.inputGate = inputGate
-  result.nodes = @[inputGate, forgetGate, memoryCell, outputGate, outputBlock]
+  result = @[inputGate, forgetGate, memoryCell, outputGate]
 
 when isMainModule:
   when defined(NARX):
@@ -575,22 +559,20 @@ when isMainModule:
       hidden = newLayer(4, NodeKind.Hidden)
       output = newLayer(1, NodeKind.Output)
       outputMemory = Layer.Memory(1, 4)
-      network = @[
-        input, 
-        outputMemory.input, 
-        outputMemory.output, 
-        hidden, 
-        inputMemory.input, 
-        inputMemory.output, 
-        output
-      ]
+    
+    var network = newSeq[Layer]()
+    network &= input
+    network &= outputMemory
+    network &= hidden
+    network &= inputMemory
+    network &= output
     
     discard input.connect(hidden)
-    discard input.connect(inputMemory.input, ConnectionKind.OneToOne.some, 1.0)
-    discard inputMemory.output.connect(hidden)
+    discard input.connect(inputMemory[^1], ConnectionKind.OneToOne.some, 1.0)
+    discard inputMemory[^1].connect(hidden)
     discard hidden.connect(output)
-    discard output.connect(outputMemory.input, ConnectionKind.OneToOne.some, 1.0)
-    discard outputMemory.output.connect(hidden)
+    discard output.connect(outputMemory[^1], ConnectionKind.OneToOne.some, 1.0)
+    discard outputMemory[^1].connect(hidden)
 
     for i in 0..5_00:
       echo network.activate(@[0.0, 0.0]), " ", 1.0
