@@ -189,11 +189,11 @@ proc activate*(self: Layer; input: openarray[float]): seq[float] =
     let node = self.nodes[i]
     result.insert(node.activate(input[i]))
 
-proc activate*(network: Network; input: openarray[float]): seq[float] =
-  discard network.nodes[0].activate(input)
-  for i in 1..<network.nodes.len - 1:
-    discard network.nodes[i].activate()
-  return network.nodes[^1].activate()
+proc activate*(self: Network; input: openarray[float]): seq[float] =
+  discard self.nodes[0].activate(input)
+  for i in 1..<self.nodes.len - 1:
+    discard self.nodes[i].activate()
+  return self.nodes[^1].activate()
 
 proc propagate*(self: Node; rateOption, momentumOption: Option[float]; update: bool; target: float = 0.0) =
   let
@@ -527,91 +527,122 @@ proc Memory*(_: typedesc[Layer]; size, memory: int): seq[Layer] =
   for layer in result:
     layer.nodes.reverse()
 
-proc Perceptron*(_: typedesc[Network]; inputSize, hiddenSize, outputSize: int): Network =
+proc Perceptron*(_: typedesc[Network]; inputSize: int; hiddenSize: openarray[int]; outputSize: int): Network =
   let
     input = newLayer(inputSize, NodeKind.Input)
-    hidden = newLayer(hiddenSize, NodeKind.Hidden)
     output = newLayer(outputSize, NodeKind.Output)
-    network = @[
-      input,
-      hidden,
-      output
-    ]
+
+  var 
+    network = newSeq[Layer]()
+    previous = input
   
-  discard input.connect(hidden)
-  discard hidden.connect(output)
+  network &= input
+
+  for i in 0..<hiddenSize.len:
+    let layer = newLayer(hiddenSize[i], NodeKind.Hidden)
+
+    network &= layer
+    discard previous.connect(layer, ConnectionKind.AllToAll.some)
+    
+    previous = layer
+  
+  network &= output
+  discard previous.connect(output, ConnectionKind.AllToAll.some)
 
   result.nodes = network
   result.input = input
   result.output = output
 
-proc NARX*(_: typedesc[Network]; inputSize, hiddenSize, outputSize, inputMemory, outputMemory: int): Network =
+proc NARX*(_: typedesc[Network]; inputSize: int; hiddenSize: openarray[int]; outputSize, inputMemory, outputMemory: int): Network =
   let
     input = newLayer(inputSize, NodeKind.Input)
     inputMemory = Layer.Memory(inputSize, inputMemory)
-    hidden = newLayer(hiddenSize, NodeKind.Hidden)
     output = newLayer(outputSize, NodeKind.Output)
     outputMemory = Layer.Memory(outputSize, outputMemory)
   
-  var network = newSeq[Layer]()
+  var 
+    network = newSeq[Layer]()
+    previous = input
+    firstHidden: Layer
+  
   network &= input
   network &= outputMemory
-  network &= hidden
+
+  for i in 0..<hiddenSize.len:
+    let layer = newLayer(hiddenSize[i], NodeKind.Hidden)
+
+    if firstHidden == nil:
+      firstHidden = layer
+
+    network &= layer
+    discard previous.connect(layer, ConnectionKind.AllToAll.some)
+    
+    previous = layer
+
   network &= inputMemory
   network &= output
+  discard previous.connect(output, ConnectionKind.AllToAll.some)
   
-  discard input.connect(hidden)
   discard input.connect(inputMemory[^1], ConnectionKind.OneToOne.some, 1.0)
-  discard inputMemory[^1].connect(hidden)
-  discard hidden.connect(output)
+  discard inputMemory[^1].connect(firstHidden)
   discard output.connect(outputMemory[^1], ConnectionKind.OneToOne.some, 1.0)
-  discard outputMemory[^1].connect(hidden)
+  discard outputMemory[^1].connect(firstHidden)
 
   result.nodes = network
   result.input = input
   result.output = output
 
-proc LSTM*(_: typedesc[Network]; inputSize, lstmSize, outputSize: int): Network =
+proc LSTM*(_: typedesc[Network]; inputSize: int; lstmSize: openarray[int]; outputSize: int): Network =
   let
     input = newLayer(inputSize, NodeKind.Input)
-    inputGate = newLayer(lstmSize)
-    forgetGate = newLayer(lstmSize)
-    memoryCell = newLayer(lstmSize)
-    outputGate = newLayer(lstmSize)
     output = newLayer(outputSize, NodeKind.Output)
-    network = @[
-      input,
-      inputGate,
-      forgetGate,
-      memoryCell,
-      outputGate,
-      output
-    ]
+
+  var 
+    network = newSeq[Layer]()
+    previous = input
+
+  network &= input
+
+  for i in 0..<lstmSize.len:
+    let
+      inputGate = newLayer(lstmSize[i])
+      forgetGate = newLayer(lstmSize[i])
+      memoryCell = newLayer(lstmSize[i])
+      outputGate = newLayer(lstmSize[i])
+      outputBlock = if i == lstmSize.len - 1: output else: newLayer(lstmSize[i])
   
-  for node in inputGate.nodes:
-    node.bias = 1
+    for node in inputGate.nodes:
+      node.bias = 1
 
-  for node in forgetGate.nodes:
-    node.bias = 1
-  
-  for node in outputGate.nodes:
-    node.bias = 1
+    for node in forgetGate.nodes:
+      node.bias = 1
+    
+    for node in outputGate.nodes:
+      node.bias = 1
 
-  let inputConn = input.connect(memoryCell, ConnectionKind.AllToAll.some)
-  discard input.connect(inputGate, ConnectionKind.AllToAll.some)
-  discard input.connect(outputGate, ConnectionKind.AllToAll.some)
-  discard input.connect(forgetGate, ConnectionKind.AllToAll.some)
+    let inputConn = previous.connect(memoryCell, ConnectionKind.AllToAll.some)
+    discard previous.connect(inputGate, ConnectionKind.AllToAll.some)
+    discard previous.connect(outputGate, ConnectionKind.AllToAll.some)
+    discard previous.connect(forgetGate, ConnectionKind.AllToAll.some)
 
-  discard memoryCell.connect(inputGate, ConnectionKind.AllToAll.some)
-  discard memoryCell.connect(forgetGate, ConnectionKind.AllToAll.some)
-  discard memoryCell.connect(outputGate, ConnectionKind.AllToAll.some)
+    discard memoryCell.connect(inputGate, ConnectionKind.AllToAll.some)
+    discard memoryCell.connect(forgetGate, ConnectionKind.AllToAll.some)
+    discard memoryCell.connect(outputGate, ConnectionKind.AllToAll.some)
 
-  let forgetConn = memoryCell.connect(memoryCell, ConnectionKind.OneToOne.some)
-  let outputConn = memoryCell.connect(output, ConnectionKind.AllToAll.some)
-  
-  inputGate.gate(inputConn, GatingKind.Input)
-  forgetGate.gate(forgetConn, GatingKind.Self)
-  outputGate.gate(outputConn, GatingKind.Output)
+    let forgetConn = memoryCell.connect(memoryCell, ConnectionKind.OneToOne.some)
+    let outputConn = memoryCell.connect(outputBlock, ConnectionKind.AllToAll.some)
+    
+    inputGate.gate(inputConn, GatingKind.Input)
+    forgetGate.gate(forgetConn, GatingKind.Self)
+    outputGate.gate(outputConn, GatingKind.Output)
+
+    network &= inputGate
+    network &= forgetGate
+    network &= memoryCell
+    network &= outputGate
+    network &= outputBlock
+
+    previous = outputBlock
 
   result.nodes = network
   result.input = input
@@ -620,7 +651,7 @@ proc LSTM*(_: typedesc[Network]; inputSize, lstmSize, outputSize: int): Network 
 when isMainModule:
   when defined(NARX):
     let
-      network = Network.NARX(2, 4, 1, 4, 4)
+      network = Network.NARX(2, [4], 1, 4, 4)
 
     for i in 0..5_00:
       echo network.activate([0.0, 0.0]), " ", 1.0
@@ -636,7 +667,7 @@ when isMainModule:
       network.propagate(float.none, float.none, true, [1.0])
   elif defined(LSTM):
     let
-      network = Network.LSTM(1, 6, 1)
+      network = Network.LSTM(1, [6, 3], 1)
 
     for i in 0..6_000:
       echo network.activate([0.0]), " ", 0.0
@@ -657,9 +688,9 @@ when isMainModule:
       network.clear()
   else:
     let
-      network = Network.Perceptron(2, 4, 1)
+      network = Network.Perceptron(2, [4, 3], 1)
 
-    for i in 0..20_000:
+    for i in 0..50_000:
       echo network.activate([0.0, 0.0]), " ", 1.0
       network.propagate(float.none, float.none, true, [1.0])
 
