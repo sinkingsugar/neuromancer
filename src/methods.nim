@@ -1,4 +1,4 @@
-import math, hashes
+import math
 
 type
   MutationKind* {.pure.} = enum

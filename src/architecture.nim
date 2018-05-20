@@ -606,10 +606,9 @@ proc LSTM*(_: typedesc[Network]; inputSize, lstmSize, outputSize: int): Network 
   discard memoryCell.connect(forgetGate, ConnectionKind.AllToAll.some)
   discard memoryCell.connect(outputGate, ConnectionKind.AllToAll.some)
 
-  let
-    forgetConn = memoryCell.connect(memoryCell, ConnectionKind.OneToOne.some)
-    outputConn = memoryCell.connect(output, ConnectionKind.AllToAll.some)
-
+  let forgetConn = memoryCell.connect(memoryCell, ConnectionKind.OneToOne.some)
+  let outputConn = memoryCell.connect(output, ConnectionKind.AllToAll.some)
+  
   inputGate.gate(inputConn, GatingKind.Input)
   forgetGate.gate(forgetConn, GatingKind.Self)
   outputGate.gate(outputConn, GatingKind.Output)
